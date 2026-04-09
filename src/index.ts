@@ -26,6 +26,7 @@ import {
   searchAdvisories,
   getAdvisory,
   listFrameworks,
+  getDataFreshness,
 } from "./db.js";
 import { buildCitation } from "./citation.js";
 
@@ -154,6 +155,26 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: "fi_cyber_list_sources",
+    description:
+      "List all data sources used by this MCP server, including NCSC-FI publications, guidelines series, and advisory feeds with their URLs and licensing.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "fi_cyber_check_data_freshness",
+    description:
+      "Check the freshness and completeness of data in this MCP server. Returns record counts and newest document dates for guidance, advisories, and frameworks.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 // --- Zod schemas for argument validation --------------------------------------
@@ -180,12 +201,27 @@ const GetAdvisoryArgs = z.object({
   reference: z.string().min(1),
 });
 
+// --- Metadata block ----------------------------------------------------------
+
+const META = {
+  _meta: {
+    disclaimer:
+      "Data sourced from official NCSC-FI/Traficom publications. Not regulatory or legal advice. Verify against primary sources before making compliance decisions.",
+    copyright: "© Traficom / NCSC-FI (National Cyber Security Centre Finland)",
+    source_url: "https://www.kyberturvallisuuskeskus.fi/",
+  },
+};
+
 // --- Helper ------------------------------------------------------------------
 
 function textContent(data: unknown) {
+  const payload =
+    typeof data === "object" && data !== null
+      ? { ...(data as unknown as Record<string, unknown>), ...META }
+      : { data, ...META };
   return {
     content: [
-      { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      { type: "text" as const, text: JSON.stringify(payload, null, 2) },
     ],
   };
 }
@@ -231,7 +267,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!doc) {
           return errorContent(`Guidance document not found: ${parsed.reference}`);
         }
-        const guidanceRecord = doc as Record<string, unknown>;
+        const guidanceRecord = doc as unknown as Record<string, unknown>;
         return textContent({
           ...guidanceRecord,
           _citation: buildCitation(
@@ -260,7 +296,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!advisory) {
           return errorContent(`Advisory not found: ${parsed.reference}`);
         }
-        const advisoryRecord = advisory as Record<string, unknown>;
+        const advisoryRecord = advisory as unknown as Record<string, unknown>;
         return textContent({
           ...advisoryRecord,
           _citation: buildCitation(
@@ -292,6 +328,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
           tools: TOOLS.map((t) => ({ name: t.name, description: t.description })),
         });
+      }
+
+      case "fi_cyber_list_sources": {
+        return textContent({
+          sources: [
+            {
+              id: "ncsc-fi-guidelines",
+              name: "NCSC-FI Guidelines and Technical Reports",
+              name_fi: "Kyberturvallisuuskeskuksen ohjeet ja tekniset raportit",
+              url: "https://www.kyberturvallisuuskeskus.fi/fi/ohjeet-ja-tukimateriaalit",
+              publisher: "NCSC-FI / Traficom",
+              language: ["fi", "en"],
+              coverage:
+                "National cybersecurity guidelines, NIS2 implementation guidance, sector-specific recommendations",
+              license: "Finnish government open data",
+              update_frequency: "As published",
+            },
+            {
+              id: "ncsc-fi-advisories",
+              name: "NCSC-FI Security Advisories and Alerts",
+              name_fi: "Kyberturvallisuuskeskuksen tietoturvavaroitukset",
+              url: "https://www.kyberturvallisuuskeskus.fi/fi/ajankohtaista/varoitukset-ja-turvatiedotteet",
+              publisher: "NCSC-FI / Traficom",
+              language: ["fi", "en"],
+              coverage: "Security advisories, vulnerability alerts, threat notifications",
+              license: "Finnish government open data",
+              update_frequency: "As published",
+            },
+          ],
+        });
+      }
+
+      case "fi_cyber_check_data_freshness": {
+        const freshness = getDataFreshness();
+        return textContent(freshness);
       }
 
       default:

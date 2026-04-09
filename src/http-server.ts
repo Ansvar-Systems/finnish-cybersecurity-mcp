@@ -29,6 +29,7 @@ import {
   searchAdvisories,
   getAdvisory,
   listFrameworks,
+  getDataFreshness,
 } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,27 +54,30 @@ const TOOLS = [
   {
     name: "fi_cyber_search_guidance",
     description:
-      "Full-text search across BSI guidelines and technical reports. Covers Technical Guidelines (TR series), IT-Grundschutz building blocks, BSI Standards, and recommendations.",
+      "Full-text search across NCSC-FI (Kyberturvallisuuskeskus) guidelines and technical reports. Covers cybersecurity guides, technical advisories, NIS2 implementation guidance, and sector-specific recommendations. Returns matching documents with reference, title, series, and summary.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (e.g., 'TLS Kryptographie', 'IT-Grundschutz Server')" },
+        query: {
+          type: "string",
+          description: "Search query in Finnish or English (e.g., 'tietoturvallisuus', 'kyberturvallisuus', 'NIS2 vaatimukset', 'vulnerability management')",
+        },
         type: {
           type: "string",
-          enum: ["technical_guideline", "it_grundschutz", "standard", "recommendation"],
+          enum: ["technical_guideline", "sector_guide", "standard", "recommendation"],
           description: "Filter by document type. Optional.",
         },
         series: {
           type: "string",
-          enum: ["NCSC-FI.*NIS2"],
-          description: "Filter by NCSC-FI guidance series. Optional.",
+          enum: ["NCSC-FI", "Kyberturva", "NIS2"],
+          description: "Filter by guidance series. Optional.",
         },
         status: {
           type: "string",
           enum: ["current", "superseded", "draft"],
-          description: "Filter by document status. Optional.",
+          description: "Filter by document status. Defaults to returning all statuses.",
         },
-        limit: { type: "number", description: "Max results (default 20)." },
+        limit: { type: "number", description: "Maximum number of results to return. Defaults to 20." },
       },
       required: ["query"],
     },
@@ -81,11 +85,11 @@ const TOOLS = [
   {
     name: "fi_cyber_get_guidance",
     description:
-      "Get a specific BSI guidance document by reference (e.g., 'BSI NCSC-FI.*NIS2 200-1', 'SYS.1.1').",
+      "Get a specific NCSC-FI guidance document by reference (e.g., 'NCSC-FI-2023-01', 'Kyberturva-ohje-001').",
     inputSchema: {
       type: "object" as const,
       properties: {
-        reference: { type: "string", description: "BSI document reference" },
+        reference: { type: "string", description: "NCSC-FI document reference" },
       },
       required: ["reference"],
     },
@@ -93,28 +97,31 @@ const TOOLS = [
   {
     name: "fi_cyber_search_advisories",
     description:
-      "Search BSI security advisories and alerts. Returns advisories with severity, affected products, and CVE references.",
+      "Search NCSC-FI security advisories and alerts. Returns advisories with severity, affected products, and CVE references where available.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (e.g., 'kritische Schwachstelle', 'Ransomware')" },
+        query: {
+          type: "string",
+          description: "Search query in Finnish or English (e.g., 'kriittinen haavoittuvuus', 'ransomware', 'VPN')",
+        },
         severity: {
           type: "string",
           enum: ["critical", "high", "medium", "low"],
           description: "Filter by severity level. Optional.",
         },
-        limit: { type: "number", description: "Max results (default 20)." },
+        limit: { type: "number", description: "Maximum number of results to return. Defaults to 20." },
       },
       required: ["query"],
     },
   },
   {
     name: "fi_cyber_get_advisory",
-    description: "Get a specific BSI security advisory by reference (e.g., 'BSI-CB-K24-0001').",
+    description: "Get a specific NCSC-FI security advisory by reference (e.g., 'NCSC-FI-2024-001').",
     inputSchema: {
       type: "object" as const,
       properties: {
-        reference: { type: "string", description: "BSI advisory reference" },
+        reference: { type: "string", description: "NCSC-FI advisory reference" },
       },
       required: ["reference"],
     },
@@ -122,12 +129,24 @@ const TOOLS = [
   {
     name: "fi_cyber_list_frameworks",
     description:
-      "List all BSI frameworks and standard series covered in this MCP.",
+      "List all NCSC-FI frameworks and guidance series covered in this MCP, including national cybersecurity guidelines and NIS2 implementation frameworks.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
   },
   {
     name: "fi_cyber_about",
     description: "Return metadata about this MCP server: version, data source, coverage, and tool list.",
+    inputSchema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "fi_cyber_list_sources",
+    description:
+      "List all data sources used by this MCP server, including NCSC-FI publications, guidelines series, and advisory feeds with their URLs and licensing.",
+    inputSchema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "fi_cyber_check_data_freshness",
+    description:
+      "Check the freshness and completeness of data in this MCP server. Returns record counts and newest document dates for guidance, advisories, and frameworks.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
   },
 ];
@@ -136,8 +155,8 @@ const TOOLS = [
 
 const SearchGuidanceArgs = z.object({
   query: z.string().min(1),
-  type: z.enum(["technical_guideline", "it_grundschutz", "standard", "recommendation"]).optional(),
-  series: z.enum(["NCSC-FI.*NIS2"]).optional(),
+  type: z.enum(["technical_guideline", "sector_guide", "standard", "recommendation"]).optional(),
+  series: z.enum(["NCSC-FI", "Kyberturva", "NIS2"]).optional(),
   status: z.enum(["current", "superseded", "draft"]).optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
@@ -156,6 +175,17 @@ const GetAdvisoryArgs = z.object({
   reference: z.string().min(1),
 });
 
+// --- Metadata block ----------------------------------------------------------
+
+const META = {
+  _meta: {
+    disclaimer:
+      "Data sourced from official NCSC-FI/Traficom publications. Not regulatory or legal advice. Verify against primary sources before making compliance decisions.",
+    copyright: "© Traficom / NCSC-FI (National Cyber Security Centre Finland)",
+    source_url: "https://www.kyberturvallisuuskeskus.fi/",
+  },
+};
+
 // --- MCP server factory ------------------------------------------------------
 
 function createMcpServer(): Server {
@@ -172,8 +202,12 @@ function createMcpServer(): Server {
     const { name, arguments: args = {} } = request.params;
 
     function textContent(data: unknown) {
+      const payload =
+        typeof data === "object" && data !== null
+          ? { ...(data as unknown as Record<string, unknown>), ...META }
+          : { data, ...META };
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
       };
     }
 
@@ -238,8 +272,48 @@ function createMcpServer(): Server {
             description:
               "NCSC-FI (Kyberturvallisuuskeskus — National Cyber Security Centre Finland) MCP server. Provides access to Finnish national cybersecurity guidelines, NIS2 implementation materials, and security advisories.",
             data_source: "NCSC-FI / Traficom (https://www.kyberturvallisuuskeskus.fi/)",
+            coverage: {
+              guidance: "National cybersecurity guidelines, NIS2 implementation guidance, sector-specific security recommendations",
+              advisories: "NCSC-FI security advisories and vulnerability alerts",
+              frameworks: "Finnish national cybersecurity framework, NIS2 compliance materials",
+            },
             tools: TOOLS.map((t) => ({ name: t.name, description: t.description })),
           });
+        }
+
+        case "fi_cyber_list_sources": {
+          return textContent({
+            sources: [
+              {
+                id: "ncsc-fi-guidelines",
+                name: "NCSC-FI Guidelines and Technical Reports",
+                name_fi: "Kyberturvallisuuskeskuksen ohjeet ja tekniset raportit",
+                url: "https://www.kyberturvallisuuskeskus.fi/fi/ohjeet-ja-tukimateriaalit",
+                publisher: "NCSC-FI / Traficom",
+                language: ["fi", "en"],
+                coverage:
+                  "National cybersecurity guidelines, NIS2 implementation guidance, sector-specific recommendations",
+                license: "Finnish government open data",
+                update_frequency: "As published",
+              },
+              {
+                id: "ncsc-fi-advisories",
+                name: "NCSC-FI Security Advisories and Alerts",
+                name_fi: "Kyberturvallisuuskeskuksen tietoturvavaroitukset",
+                url: "https://www.kyberturvallisuuskeskus.fi/fi/ajankohtaista/varoitukset-ja-turvatiedotteet",
+                publisher: "NCSC-FI / Traficom",
+                language: ["fi", "en"],
+                coverage: "Security advisories, vulnerability alerts, threat notifications",
+                license: "Finnish government open data",
+                update_frequency: "As published",
+              },
+            ],
+          });
+        }
+
+        case "fi_cyber_check_data_freshness": {
+          const freshness = getDataFreshness();
+          return textContent(freshness);
         }
 
         default:
