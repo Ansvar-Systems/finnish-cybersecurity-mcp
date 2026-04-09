@@ -2,9 +2,9 @@
  * SQLite database access layer for the Finnish Cybersecurity (NCSC-FI) MCP server.
  *
  * Schema:
- *   - guidance    — NCSC-FI guidelines, technical reports, and standards (TR, IT-Grundschutz, BSI-Standard)
- *   - advisories  — BSI security advisories and alerts
- *   - frameworks  — BSI framework series (IT-Grundschutz Kompendium, TR series, BSI Standards)
+ *   - guidance    — NCSC-FI guidelines, technical reports, and standards
+ *   - advisories  — NCSC-FI security advisories and alerts
+ *   - frameworks  — NCSC-FI framework series (national cybersecurity guidelines, NIS2 materials)
  *
  * FTS5 virtual tables back full-text search on guidance and advisories.
  */
@@ -260,4 +260,32 @@ export function listFrameworks(): Framework[] {
   return db
     .prepare("SELECT * FROM frameworks ORDER BY id")
     .all() as Framework[];
+}
+
+// --- Data freshness -----------------------------------------------------------
+
+export interface DataFreshness {
+  guidance_count: number;
+  advisories_count: number;
+  frameworks_count: number;
+  newest_guidance_date: string | null;
+  newest_advisory_date: string | null;
+  checked_at: string;
+}
+
+export function getDataFreshness(): DataFreshness {
+  const db = getDb();
+  const guidanceCount = (db.prepare("SELECT COUNT(*) as count FROM guidance").get() as { count: number }).count;
+  const advisoriesCount = (db.prepare("SELECT COUNT(*) as count FROM advisories").get() as { count: number }).count;
+  const frameworksCount = (db.prepare("SELECT COUNT(*) as count FROM frameworks").get() as { count: number }).count;
+  const newestGuidance = db.prepare("SELECT MAX(date) as date FROM guidance").get() as { date: string | null };
+  const newestAdvisory = db.prepare("SELECT MAX(date) as date FROM advisories").get() as { date: string | null };
+  return {
+    guidance_count: guidanceCount,
+    advisories_count: advisoriesCount,
+    frameworks_count: frameworksCount,
+    newest_guidance_date: newestGuidance.date,
+    newest_advisory_date: newestAdvisory.date,
+    checked_at: new Date().toISOString(),
+  };
 }

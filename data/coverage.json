@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "mcp_name": "finnish-cybersecurity-mcp",
+  "publisher": "Ansvar Systems AB",
+  "last_updated": "2026-04-09",
+  "sources": [
+    {
+      "id": "ncsc-fi-guidelines",
+      "name": "NCSC-FI Guidelines and Technical Reports",
+      "name_fi": "Kyberturvallisuuskeskuksen ohjeet ja tekniset raportit",
+      "url": "https://www.kyberturvallisuuskeskus.fi/fi/ohjeet-ja-tukimateriaalit",
+      "publisher": "NCSC-FI / Traficom",
+      "language": ["fi", "en"],
+      "coverage": "National cybersecurity guidelines, NIS2 implementation guidance, sector-specific recommendations",
+      "license": "Finnish government open data",
+      "update_frequency": "As published",
+      "series": ["NCSC-FI", "Kyberturva", "NIS2"],
+      "document_types": ["technical_guideline", "sector_guide", "standard", "recommendation"]
+    },
+    {
+      "id": "ncsc-fi-advisories",
+      "name": "NCSC-FI Security Advisories and Alerts",
+      "name_fi": "Kyberturvallisuuskeskuksen tietoturvavaroitukset",
+      "url": "https://www.kyberturvallisuuskeskus.fi/fi/ajankohtaista/varoitukset-ja-turvatiedotteet",
+      "publisher": "NCSC-FI / Traficom",
+      "language": ["fi", "en"],
+      "coverage": "Security advisories, vulnerability alerts, threat notifications",
+      "license": "Finnish government open data",
+      "update_frequency": "As published",
+      "severity_levels": ["critical", "high", "medium", "low"]
+    }
+  ],
+  "not_covered": [
+    "Classified or restricted NCSC-FI publications",
+    "Real-time threat intelligence feeds",
+    "ENISA publications",
+    "Finnish cybersecurity legislation text"
+  ]
+}
