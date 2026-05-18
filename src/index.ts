@@ -27,7 +27,12 @@ import {
   getAdvisory,
   listFrameworks,
 } from "./db.js";
-import { buildCitation } from "./citation.js";
+import { buildCitation, buildProvenanceCitation } from "./citation.js";
+
+// Provenance attribution constants for fi_cyber_* tool envelopes.
+// Used by buildProvenanceCitation per spec 2026-05-18 §6.
+const PROV_PUBLISHER = "NCSC-FI (Kyberturvallisuuskeskus, Traficom)";
+const PROV_LICENSE = "FI-Statutory-PD";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -222,16 +227,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           status: parsed.status,
           limit: parsed.limit,
         });
+        // Per spec §6: every search result carries the provenance envelope
+        // on `_citation`. Rows without source_url are skipped from citation
+        // emission (No Silent Fallbacks) but still returned with row data.
         const withCitations = results.map((r) => {
           const rec = r as unknown as Record<string, unknown>;
+          const sourceUrl =
+            typeof rec.source_url === "string" ? (rec.source_url as string) : "";
+          if (!sourceUrl) return rec;
           return {
             ...rec,
-            _citation: buildCitation(
-              String(rec.reference ?? ""),
-              String(rec.title ?? rec.reference ?? ""),
-              "fi_cyber_get_guidance",
-              { reference: String(rec.reference ?? "") },
-              rec.source_url as string | null | undefined,
+            _citation: buildProvenanceCitation(
+              { source_url: sourceUrl },
+              PROV_PUBLISHER,
+              PROV_LICENSE,
             ),
           };
         });
@@ -245,16 +254,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(`Guidance document not found: ${parsed.reference}`);
         }
         const guidanceRecord = doc as unknown as Record<string, unknown>;
-        return textContent({
+        const sourceUrl =
+          typeof guidanceRecord.source_url === "string"
+            ? (guidanceRecord.source_url as string)
+            : null;
+        // Per spec §6: provenance envelope on `_citation`; deterministic
+        // canonical_ref envelope on `_entity_citation` (law-mcp §4.9c).
+        const out: Record<string, unknown> = {
           ...guidanceRecord,
-          _citation: buildCitation(
+          _entity_citation: buildCitation(
             String(guidanceRecord.reference ?? parsed.reference),
             String(guidanceRecord.title ?? guidanceRecord.reference ?? parsed.reference),
             "fi_cyber_get_guidance",
             { reference: parsed.reference },
-            guidanceRecord.source_url as string | null | undefined,
+            sourceUrl,
           ),
-        });
+        };
+        if (sourceUrl) {
+          out["_citation"] = buildProvenanceCitation(
+            { source_url: sourceUrl },
+            PROV_PUBLISHER,
+            PROV_LICENSE,
+          );
+        }
+        return textContent(out);
       }
 
       case "fi_cyber_search_advisories": {
@@ -266,14 +289,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
         const withCitations = results.map((r) => {
           const rec = r as unknown as Record<string, unknown>;
+          const sourceUrl =
+            typeof rec.source_url === "string" ? (rec.source_url as string) : "";
+          if (!sourceUrl) return rec;
           return {
             ...rec,
-            _citation: buildCitation(
-              String(rec.reference ?? ""),
-              String(rec.title ?? rec.reference ?? ""),
-              "fi_cyber_get_advisory",
-              { reference: String(rec.reference ?? "") },
-              rec.source_url as string | null | undefined,
+            _citation: buildProvenanceCitation(
+              { source_url: sourceUrl },
+              PROV_PUBLISHER,
+              PROV_LICENSE,
             ),
           };
         });
@@ -287,16 +311,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return errorContent(`Advisory not found: ${parsed.reference}`);
         }
         const advisoryRecord = advisory as unknown as Record<string, unknown>;
-        return textContent({
+        const sourceUrl =
+          typeof advisoryRecord.source_url === "string"
+            ? (advisoryRecord.source_url as string)
+            : null;
+        const out: Record<string, unknown> = {
           ...advisoryRecord,
-          _citation: buildCitation(
+          _entity_citation: buildCitation(
             String(advisoryRecord.reference ?? parsed.reference),
             String(advisoryRecord.title ?? advisoryRecord.reference ?? parsed.reference),
             "fi_cyber_get_advisory",
             { reference: parsed.reference },
-            advisoryRecord.source_url as string | null | undefined,
+            sourceUrl,
           ),
-        });
+        };
+        if (sourceUrl) {
+          out["_citation"] = buildProvenanceCitation(
+            { source_url: sourceUrl },
+            PROV_PUBLISHER,
+            PROV_LICENSE,
+          );
+        }
+        return textContent(out);
       }
 
       case "fi_cyber_list_frameworks": {
