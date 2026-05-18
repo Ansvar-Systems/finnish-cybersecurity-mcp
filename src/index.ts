@@ -60,12 +60,12 @@ const TOOLS = [
         },
         type: {
           type: "string",
-          enum: ["technical_guideline", "sector_guide", "standard", "recommendation"],
-          description: "Filter by document type. Optional.",
+          enum: ["technical_guideline", "sector_guide", "standard", "recommendation", "news_article", "weekly_review", "cyber_weather"],
+          description: "Filter by document type. Optional. 'news_article' = NCSC-FI news posts; 'weekly_review' = viikkokatsaus weekly summaries; 'cyber_weather' = kybersaa monthly outlook.",
         },
         series: {
           type: "string",
-          enum: ["NCSC-FI", "Kyberturva", "NIS2"],
+          enum: ["NCSC-FI", "NIS2", "viikkokatsaus", "kybersaa"],
           description: "Filter by guidance series. Optional.",
         },
         status: {
@@ -160,8 +160,8 @@ const TOOLS = [
 
 const SearchGuidanceArgs = z.object({
   query: z.string().min(1),
-  type: z.enum(["technical_guideline", "sector_guide", "standard", "recommendation"]).optional(),
-  series: z.enum(["NCSC-FI", "Kyberturva", "NIS2"]).optional(),
+  type: z.enum(["technical_guideline", "sector_guide", "standard", "recommendation", "news_article", "weekly_review", "cyber_weather"]).optional(),
+  series: z.enum(["NCSC-FI", "NIS2", "viikkokatsaus", "kybersaa"]).optional(),
   status: z.enum(["current", "superseded", "draft"]).optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
@@ -222,7 +222,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           status: parsed.status,
           limit: parsed.limit,
         });
-        return textContent({ results, count: results.length });
+        const withCitations = results.map((r) => {
+          const rec = r as unknown as Record<string, unknown>;
+          return {
+            ...rec,
+            _citation: buildCitation(
+              String(rec.reference ?? ""),
+              String(rec.title ?? rec.reference ?? ""),
+              "fi_cyber_get_guidance",
+              { reference: String(rec.reference ?? "") },
+              rec.source_url as string | null | undefined,
+            ),
+          };
+        });
+        return textContent({ results: withCitations, count: withCitations.length });
       }
 
       case "fi_cyber_get_guidance": {
@@ -239,7 +252,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             String(guidanceRecord.title ?? guidanceRecord.reference ?? parsed.reference),
             "fi_cyber_get_guidance",
             { reference: parsed.reference },
-            guidanceRecord.url as string | undefined,
+            guidanceRecord.source_url as string | null | undefined,
           ),
         });
       }
@@ -251,7 +264,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           severity: parsed.severity,
           limit: parsed.limit,
         });
-        return textContent({ results, count: results.length });
+        const withCitations = results.map((r) => {
+          const rec = r as unknown as Record<string, unknown>;
+          return {
+            ...rec,
+            _citation: buildCitation(
+              String(rec.reference ?? ""),
+              String(rec.title ?? rec.reference ?? ""),
+              "fi_cyber_get_advisory",
+              { reference: String(rec.reference ?? "") },
+              rec.source_url as string | null | undefined,
+            ),
+          };
+        });
+        return textContent({ results: withCitations, count: withCitations.length });
       }
 
       case "fi_cyber_get_advisory": {
@@ -268,7 +294,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             String(advisoryRecord.title ?? advisoryRecord.reference ?? parsed.reference),
             "fi_cyber_get_advisory",
             { reference: parsed.reference },
-            advisoryRecord.url as string | undefined,
+            advisoryRecord.source_url as string | null | undefined,
           ),
         });
       }

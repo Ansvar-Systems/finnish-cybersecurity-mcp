@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS guidance (
   summary    TEXT,
   full_text  TEXT    NOT NULL,
   topics     TEXT,
-  status     TEXT    DEFAULT 'current'
+  status     TEXT    DEFAULT 'current',
+  source_url TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_guidance_date   ON guidance(date);
@@ -65,7 +66,8 @@ CREATE TABLE IF NOT EXISTS advisories (
   affected_products TEXT,
   summary           TEXT,
   full_text         TEXT    NOT NULL,
-  cve_references    TEXT
+  cve_references    TEXT,
+  source_url        TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_advisories_date     ON advisories(date);
@@ -117,6 +119,7 @@ export interface Guidance {
   full_text: string;
   topics: string | null;
   status: string;
+  source_url: string | null;
 }
 
 export interface Advisory {
@@ -129,6 +132,7 @@ export interface Advisory {
   summary: string | null;
   full_text: string;
   cve_references: string | null;
+  source_url: string | null;
 }
 
 export interface Framework {
@@ -137,6 +141,40 @@ export interface Framework {
   name_en: string | null;
   description: string | null;
   document_count: number;
+}
+
+// --- FTS query rewriter ------------------------------------------------------
+
+/**
+ * Rewrite a user-supplied query for FTS5 MATCH against a unicode61-tokenized
+ * corpus. Finnish is highly agglutinative; the default tokenizer indexes
+ * surface forms so bare-token searches miss inflected variants. Auto-append
+ * `*` to each bare alphanumeric token so `tietoturva` also matches
+ * `tietoturvallisuus`, `tietoturvallisuuden`, etc. Skip rewrite if the user
+ * already supplied any FTS operator — they know what they're doing.
+ *
+ * @internal exported for tests
+ */
+export function rewriteQueryForFts(q: string): string {
+  if (!q) return q;
+  // If the query already uses FTS5 operators, do not touch it.
+  // Operators: AND, OR, NOT, NEAR, double quotes (phrase), * (prefix),
+  // ^ (column filter), : (column qualifier), parentheses, +.
+  if (/["*^:()+]/.test(q) || /\b(AND|OR|NOT|NEAR)\b/.test(q)) {
+    return q;
+  }
+  return q
+    .split(/\s+/)
+    .filter((tok) => tok.length > 0)
+    .map((tok) => {
+      // Only append * to plain alphanumeric/unicode-letter tokens. Anything
+      // with punctuation (CVE-2024-1234, RFC.5246) we leave alone.
+      if (/^[\p{L}\p{N}]+$/u.test(tok)) {
+        return `${tok}*`;
+      }
+      return tok;
+    })
+    .join(" ");
 }
 
 // --- DB singleton -------------------------------------------------------------
@@ -170,7 +208,10 @@ export function searchGuidance(opts: SearchGuidanceOptions): Guidance[] {
   const limit = opts.limit ?? 20;
 
   const conditions: string[] = ["guidance_fts MATCH :query"];
-  const params: Record<string, unknown> = { query: opts.query, limit };
+  const params: Record<string, unknown> = {
+    query: rewriteQueryForFts(opts.query),
+    limit,
+  };
 
   if (opts.type) {
     conditions.push("g.type = :type");
@@ -219,7 +260,10 @@ export function searchAdvisories(opts: SearchAdvisoriesOptions): Advisory[] {
   const limit = opts.limit ?? 20;
 
   const conditions: string[] = ["advisories_fts MATCH :query"];
-  const params: Record<string, unknown> = { query: opts.query, limit };
+  const params: Record<string, unknown> = {
+    query: rewriteQueryForFts(opts.query),
+    limit,
+  };
 
   if (opts.severity) {
     conditions.push("a.severity = :severity");
