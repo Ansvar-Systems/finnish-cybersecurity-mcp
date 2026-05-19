@@ -30,6 +30,12 @@ import {
   getAdvisory,
   listFrameworks,
 } from "./db.js";
+import { buildCitation, buildProvenanceCitation } from "./citation.js";
+
+// Provenance attribution constants for fi_cyber_* tool envelopes.
+// Used by buildProvenanceCitation per spec 2026-05-18 §6.
+const PROV_PUBLISHER = "NCSC-FI (Kyberturvallisuuskeskus, Traficom)";
+const PROV_LICENSE = "FI-Statutory-PD";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -53,19 +59,19 @@ const TOOLS = [
   {
     name: "fi_cyber_search_guidance",
     description:
-      "Full-text search across BSI guidelines and technical reports. Covers Technical Guidelines (TR series), IT-Grundschutz building blocks, BSI Standards, and recommendations.",
+      "Full-text search across NCSC-FI (Kyberturvallisuuskeskus) guidelines and technical reports. Covers cybersecurity guides, technical advisories, NIS2 implementation guidance, weekly cyber-situation reviews (viikkokatsaus), monthly cyber-weather outlooks (kybersaa), and sector-specific recommendations.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (e.g., 'TLS Kryptographie', 'IT-Grundschutz Server')" },
+        query: { type: "string", description: "Search query in Finnish or English (e.g., 'tietoturvallisuus', 'kyberturvallisuus', 'NIS2 vaatimukset', 'vulnerability management')" },
         type: {
           type: "string",
-          enum: ["technical_guideline", "it_grundschutz", "standard", "recommendation"],
+          enum: ["technical_guideline", "sector_guide", "standard", "recommendation", "news_article", "weekly_review", "cyber_weather"],
           description: "Filter by document type. Optional.",
         },
         series: {
           type: "string",
-          enum: ["NCSC-FI.*NIS2"],
+          enum: ["NCSC-FI", "NIS2", "viikkokatsaus", "kybersaa"],
           description: "Filter by NCSC-FI guidance series. Optional.",
         },
         status: {
@@ -81,11 +87,11 @@ const TOOLS = [
   {
     name: "fi_cyber_get_guidance",
     description:
-      "Get a specific BSI guidance document by reference (e.g., 'BSI NCSC-FI.*NIS2 200-1', 'SYS.1.1').",
+      "Get a specific NCSC-FI guidance document by reference (e.g., 'NCSC-FI-2023-01', 'NCSC-FI-WEEKLY-2026-12').",
     inputSchema: {
       type: "object" as const,
       properties: {
-        reference: { type: "string", description: "BSI document reference" },
+        reference: { type: "string", description: "NCSC-FI document reference" },
       },
       required: ["reference"],
     },
@@ -93,11 +99,11 @@ const TOOLS = [
   {
     name: "fi_cyber_search_advisories",
     description:
-      "Search BSI security advisories and alerts. Returns advisories with severity, affected products, and CVE references.",
+      "Search NCSC-FI security advisories and alerts. Returns advisories with severity, affected products, and CVE references.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (e.g., 'kritische Schwachstelle', 'Ransomware')" },
+        query: { type: "string", description: "Search query in Finnish or English (e.g., 'kriittinen haavoittuvuus', 'ransomware', 'VPN')" },
         severity: {
           type: "string",
           enum: ["critical", "high", "medium", "low"],
@@ -110,11 +116,11 @@ const TOOLS = [
   },
   {
     name: "fi_cyber_get_advisory",
-    description: "Get a specific BSI security advisory by reference (e.g., 'BSI-CB-K24-0001').",
+    description: "Get a specific NCSC-FI security advisory by reference (e.g., 'NCSC-FI-VULN-2026-05').",
     inputSchema: {
       type: "object" as const,
       properties: {
-        reference: { type: "string", description: "BSI advisory reference" },
+        reference: { type: "string", description: "NCSC-FI advisory reference" },
       },
       required: ["reference"],
     },
@@ -122,7 +128,7 @@ const TOOLS = [
   {
     name: "fi_cyber_list_frameworks",
     description:
-      "List all BSI frameworks and standard series covered in this MCP.",
+      "List all NCSC-FI frameworks and guidance series covered in this MCP.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
   },
   {
@@ -136,8 +142,8 @@ const TOOLS = [
 
 const SearchGuidanceArgs = z.object({
   query: z.string().min(1),
-  type: z.enum(["technical_guideline", "it_grundschutz", "standard", "recommendation"]).optional(),
-  series: z.enum(["NCSC-FI.*NIS2"]).optional(),
+  type: z.enum(["technical_guideline", "sector_guide", "standard", "recommendation", "news_article", "weekly_review", "cyber_weather"]).optional(),
+  series: z.enum(["NCSC-FI", "NIS2", "viikkokatsaus", "kybersaa"]).optional(),
   status: z.enum(["current", "superseded", "draft"]).optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
@@ -195,7 +201,24 @@ function createMcpServer(): Server {
             status: parsed.status,
             limit: parsed.limit,
           });
-          return textContent({ results, count: results.length });
+          // Per spec §6: every search result carries the provenance envelope
+          // on `_citation`. Rows without source_url are skipped from citation
+          // emission (No Silent Fallbacks) but still returned with row data.
+          const withCitations = results.map((r) => {
+            const rec = r as unknown as Record<string, unknown>;
+            const sourceUrl =
+              typeof rec.source_url === "string" ? (rec.source_url as string) : "";
+            if (!sourceUrl) return rec;
+            return {
+              ...rec,
+              _citation: buildProvenanceCitation(
+                { source_url: sourceUrl },
+                PROV_PUBLISHER,
+                PROV_LICENSE,
+              ),
+            };
+          });
+          return textContent({ results: withCitations, count: withCitations.length });
         }
 
         case "fi_cyber_get_guidance": {
@@ -204,7 +227,31 @@ function createMcpServer(): Server {
           if (!doc) {
             return errorContent(`Guidance document not found: ${parsed.reference}`);
           }
-          return textContent(doc);
+          const guidanceRecord = doc as unknown as Record<string, unknown>;
+          const sourceUrl =
+            typeof guidanceRecord.source_url === "string"
+              ? (guidanceRecord.source_url as string)
+              : null;
+          // Per spec §6: provenance envelope on `_citation`; deterministic
+          // canonical_ref envelope on `_entity_citation` (law-mcp §4.9c).
+          const out: Record<string, unknown> = {
+            ...guidanceRecord,
+            _entity_citation: buildCitation(
+              String(guidanceRecord.reference ?? parsed.reference),
+              String(guidanceRecord.title ?? guidanceRecord.reference ?? parsed.reference),
+              "fi_cyber_get_guidance",
+              { reference: parsed.reference },
+              sourceUrl,
+            ),
+          };
+          if (sourceUrl) {
+            out["_citation"] = buildProvenanceCitation(
+              { source_url: sourceUrl },
+              PROV_PUBLISHER,
+              PROV_LICENSE,
+            );
+          }
+          return textContent(out);
         }
 
         case "fi_cyber_search_advisories": {
@@ -214,7 +261,21 @@ function createMcpServer(): Server {
             severity: parsed.severity,
             limit: parsed.limit,
           });
-          return textContent({ results, count: results.length });
+          const withCitations = results.map((r) => {
+            const rec = r as unknown as Record<string, unknown>;
+            const sourceUrl =
+              typeof rec.source_url === "string" ? (rec.source_url as string) : "";
+            if (!sourceUrl) return rec;
+            return {
+              ...rec,
+              _citation: buildProvenanceCitation(
+                { source_url: sourceUrl },
+                PROV_PUBLISHER,
+                PROV_LICENSE,
+              ),
+            };
+          });
+          return textContent({ results: withCitations, count: withCitations.length });
         }
 
         case "fi_cyber_get_advisory": {
@@ -223,7 +284,29 @@ function createMcpServer(): Server {
           if (!advisory) {
             return errorContent(`Advisory not found: ${parsed.reference}`);
           }
-          return textContent(advisory);
+          const advisoryRecord = advisory as unknown as Record<string, unknown>;
+          const sourceUrl =
+            typeof advisoryRecord.source_url === "string"
+              ? (advisoryRecord.source_url as string)
+              : null;
+          const out: Record<string, unknown> = {
+            ...advisoryRecord,
+            _entity_citation: buildCitation(
+              String(advisoryRecord.reference ?? parsed.reference),
+              String(advisoryRecord.title ?? advisoryRecord.reference ?? parsed.reference),
+              "fi_cyber_get_advisory",
+              { reference: parsed.reference },
+              sourceUrl,
+            ),
+          };
+          if (sourceUrl) {
+            out["_citation"] = buildProvenanceCitation(
+              { source_url: sourceUrl },
+              PROV_PUBLISHER,
+              PROV_LICENSE,
+            );
+          }
+          return textContent(out);
         }
 
         case "fi_cyber_list_frameworks": {
@@ -236,8 +319,13 @@ function createMcpServer(): Server {
             name: SERVER_NAME,
             version: pkgVersion,
             description:
-              "NCSC-FI (Kyberturvallisuuskeskus — National Cyber Security Centre Finland) MCP server. Provides access to Finnish national cybersecurity guidelines, NIS2 implementation materials, and security advisories.",
+              "NCSC-FI (Kyberturvallisuuskeskus — National Cyber Security Centre Finland, a unit of Traficom) MCP server. Provides access to Finnish national cybersecurity guidelines, technical reports, sector-specific guidance, NIS2 implementation materials, weekly cyber-situation reviews (viikkokatsaus), monthly cyber-weather outlooks (kybersaa), and security advisories.",
             data_source: "NCSC-FI / Traficom (https://www.kyberturvallisuuskeskus.fi/)",
+            coverage: {
+              guidance: "National cybersecurity guidelines, NIS2 implementation guidance, weekly reviews, sector-specific recommendations",
+              advisories: "NCSC-FI security advisories and vulnerability alerts",
+              frameworks: "Finnish national cybersecurity framework, NIS2 compliance materials",
+            },
             tools: TOOLS.map((t) => ({ name: t.name, description: t.description })),
           });
         }
