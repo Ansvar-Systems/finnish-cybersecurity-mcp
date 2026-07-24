@@ -437,7 +437,18 @@ function parseGuideListingPage(html: string, pageUrl: string): GuideLinkItem[] {
 // Reference generation
 // ---------------------------------------------------------------------------
 
-function generateReference(url: string, index: number): string {
+export function generateReference(url: string, index: number): string {
+  // Strip query + fragment BEFORE any pattern work. RSS item URLs carry
+  // Matomo tracking params (?mtm_campaign=rss&mtm_source=rss); un-stripped
+  // they (a) transliterated into the generic slug and truncated at 60 chars
+  // — 236 served refs ended in a '-MTM-CAMPAIGN-RSS-…' remnant (arch ledger
+  // row eu-cybersecurity-bare-rows-empty-source-url residual [3]) — and
+  // (b) defeated every $-anchored pattern below (the weeklyAlt
+  // 'viikkokatsaus-242026' shape fell through to the generic path).
+  // Refs CHANGE for those rows on the next ingest — deliberate normalization,
+  // recorded in the ledger row; source_url keeps the publisher's URL verbatim.
+  url = url.split("?")[0]!.split("#")[0]!;
+
   // Vulnerability: /fi/haavoittuvuus_13/2024 => NCSC-FI-VULN-2024-13
   const vulnMatch = url.match(/haavoittuvuus[_-](\d+)\/(\d{4})/);
   if (vulnMatch) {
