@@ -52,16 +52,28 @@ const GUIDE_LISTING_PAGES = [
   `${BASE_URL}/fi/ajankohtaista/ohjeet-ja-oppaat/ohjeet-ja-oppaat-yksityishenkiloille`,
 ] as const;
 
-// Patterns that identify vulnerability advisories by URL
+// Patterns that identify vulnerability advisories by URL.
+// 2026-07-24: kyberturvallisuuskeskus.fi moved vulnerability pages from the
+// legacy numbered shape (/fi/haavoittuvuus_13/2024) to a section-path shape
+// (/fi/haavoittuvuudet/<slug>). The legacy patterns below missed every
+// section-path URL, so the whole vulns RSS feed ingested as guidance
+// type=news_article and the v1.1.0 DB served advisories=0 (was 176; arch
+// findings-ledger row eu-cybersecurity-fi-advisories-lost-to-stale-url-
+// classifier). Section paths verified against the first-hand URL map of all
+// v1.0.0 advisories (eu-cybersecurity branch archive/fi-advisory-url-map-
+// 2026-07-22: 167× /fi/haavoittuvuudet/, 7× /fi/varoitukset/). Legacy
+// patterns kept — old URLs still resolve via redirects.
 const VULN_URL_PATTERNS = [
+  /\/fi\/haavoittuvuudet\//,
   /\/fi\/haavoittuvuus[_-]/,
   /\/fi\/kriittis/,
   /\/fi\/haavoittuvuuksia-/,
   /\/en\/haavoittuvuus[_-]/,
 ];
 
-// Patterns that identify alerts/warnings by URL
+// Patterns that identify alerts/warnings by URL (section path + legacy shapes)
 const ALERT_URL_PATTERNS = [
+  /\/fi\/varoitukset\//,
   /\/fi\/varoitus[_-]/,
   /\/fi\/tietomurto/,
   /\/fi\/varo-/,
@@ -489,11 +501,25 @@ function generateReference(url: string, index: number): string {
 
 type ContentType = "advisory" | "guidance";
 
-function classifyContent(url: string, title: string): {
+// Feed names (ingestRssFeed's feedName) whose items are advisories by
+// construction: /feed/rss/fi/400 is NCSC-FI's dedicated vulnerability feed,
+// /feed/rss/fi/401 the dedicated alerts feed. Feed provenance is the primary
+// signal — it is deterministic and survives URL-taxonomy churn (the v1.0.0
+// advisory set even contains one canonical page under /fi/uutiset/, which no
+// section-path pattern can catch). URL patterns remain as the secondary
+// signal for items reached outside these feeds.
+const ADVISORY_FEEDS = new Set(["vulnerabilities", "alerts"]);
+
+function classifyContent(url: string, title: string, feedName?: string): {
   type: ContentType;
   guidanceType: string | null;
   series: string | null;
 } {
+  // Items from the dedicated vulnerability/alert feeds => advisory
+  if (feedName !== undefined && ADVISORY_FEEDS.has(feedName)) {
+    return { type: "advisory", guidanceType: null, series: null };
+  }
+
   // Vulnerabilities and alerts => advisory
   if (VULN_URL_PATTERNS.some((p) => p.test(url))) {
     return { type: "advisory", guidanceType: null, series: null };
@@ -664,7 +690,7 @@ async function ingestRssFeed(
       stats.errors++;
     }
 
-    const classification = classifyContent(item.link, item.title);
+    const classification = classifyContent(item.link, item.title, feedName);
 
     if (!DRY_RUN) {
       try {
